@@ -17,7 +17,7 @@
 #define NA_WYCIAGU 1
 #define KONIEC_WJAZDU 2
 
-#define MSG_SIZE 5
+#define MSG_SIZE 6
 #define MPI_TAG 1
 
 //typ
@@ -28,6 +28,7 @@
 #define RESPONSE 4
 #define REQUEST 5
 #define END 6
+#define WEIGHT 5
 
 #define RANK 0
 #define ZEGAR 1
@@ -51,12 +52,14 @@ struct Package {
 	int typ;
 	int val;
 	int TIMES;
+	int weight;
 };
 
 int zegar = 0;
 int timestamp = 0;
 int stan = 0;
 int typ = 0;
+int waga = 0;
 int permissions = 0;
 int procInQueue = 0;
 int id;
@@ -65,12 +68,12 @@ bool threadAnswer = false;
 bool processed = false;
 bool ready = false;
 
-mutex queue_mutex, clock_mutex, stan_mutex, receiveResponses_mutex, m, tab_mutex;
+mutex queue_mutex, clock_mutex, stan_mutex, receiveResponses_mutex, m, tab_mutex, vec_mutex;
 condition_variable newMessageReceived, cv;
 
 vector<Package> queue;
-vector<Package> reqVector;
-Narciarz *tab = new Narciarz[S];
+vector<Narciarz> reqVector;
+Narciarz *tab;
 Narciarz narciarz = Narciarz();
 
 
@@ -96,6 +99,7 @@ void sendMessage(int receiver, int typ, int val){
 	msg[RANK] = id;
 	msg[TYP] = typ;
 	msg[VAL] = val;
+	msg[WEIGHT] = waga;
 	//MPI_Bcast(msg, MSG_SIZE, MPI_INT, msg[0], MPI_COMM_WORLD);
 	MPI_Send(msg, MSG_SIZE, MPI_INT, receiver, MPI_TAG, MPI_COMM_WORLD);
 	//cout << id << ": " << "wyslalem do " << receiver << "\n";
@@ -114,6 +118,7 @@ void sendMessageToAll(int typ, int val){
 	msg[RANK] = id;
 	msg[TYP] = typ;
 	msg[VAL] = val;
+	msg[WEIGHT] = waga;
 	//MPI_Bcast(msg, MSG_SIZE, MPI_INT, msg[0], MPI_COMM_WORLD);
 	for(int i=0; i<size; i++){
 		if (id!=i){
@@ -157,6 +162,7 @@ void addToQueue(int *msg){
 	n.typ = msg[TYP];
 	n.val = msg[VAL];
 	n.TIMES = msg[TIMESTAMP];
+	n.weight = msg[WEIGHT];
 	queue_mutex.lock();
 	queue.push_back(n);
 	queue_mutex.unlock();
@@ -177,12 +183,37 @@ void initTab(){
 	}
 }
 
+void vecToTab(){
+	delete[] tab;
+	procInQueue = reqVector.size();
+	tab = new Narciarz[procInQueue];
+	for(int n=0; n<procInQueue; n++)
+		tab[n] = reqVector.at(n);
+}
+
+void tabToVec(){
+	reqVector.clear();
+	for (int i = 0; i<procInQueue; i++) {
+		reqVector.push_back(tab[i]);
+	}
+	/*
+	for(int i = 0; i<size; i++){
+		Narciarz adam = Narciarz();
+		adam.rank = tab[i].rank;
+		adam.zegar = tab[i].zegar;
+		adam.TIMES = tab[i].TIMES;
+		adam.waga = tab[i].weight;
+		reqVector.push_back(adam);
+	}
+	*/
+}
+
 void sortTab(){
 	//for(int n=0; n<size; n++)
 	//tab[n] = queue.at(n);
 	int j;
 	Narciarz temp;
-	for(int i=1; i<size; i++){
+	for(int i=1; i<procInQueue; i++){
 		temp = tab[i];
 		j = i-1;
 		while(j>=0 && (tab[j].TIMES>temp.TIMES || (tab[j].TIMES==temp.TIMES && tab[j].rank>temp.rank))) {
@@ -193,9 +224,9 @@ void sortTab(){
 	}
 }
 
-void printQueue(){
-	for(int i=0; i<queue.size(); i++){
-		printf("Kolejka rank:%d zegar:%d waga:%d stan:%d\n", queue.at(i).rank, queue.at(i).zegar, queue.at(i).typ, queue.at(i).val);
+void printVec(){
+	for(int i=0; i<reqVector.size(); i++){
+		printf("%d: kolejka rank:%d zegar:%d timestamp:%d waga:%d\n", id, reqVector.at(i).rank, reqVector.at(i).zegar, reqVector.at(i).TIMES, reqVector.at(i).waga);
 	}
 }
 
@@ -207,12 +238,11 @@ void printTab(){
 
 
 
-void eraseFromVector(){
-	int i = 0;
+void eraseFromVector(int i){
 	for (int j = 0; j<reqVector.size(); j++){
-		if (j==reqVector.at(j).rank) break;
+		if (i==reqVector.at(j).rank)
+			reqVector.erase(reqVector.begin()+j);
 	}
-
 }
 
 
@@ -228,7 +258,7 @@ void sleepAndAnswer(){
 		if (msgRecv[TYP]==RESPONSE && msgRecv[ZEGAR]>=timestamp){
 			if (msgRecv[VAL]== NA_WYCIAGU || msgRecv[VAL]==W_KOLEJCE){
 				addToQueue(msgRecv);
-				procInQueue++;
+				//procInQueue++;
 			}
 			permissions++;
 
@@ -259,12 +289,16 @@ void sleepAndAnswer(){
 			MPI_Send(msgSend, MSG_SIZE, MPI_INT, msgRecv[RANK], MPI_TAG, MPI_COMM_WORLD);
 			std::cout << id << ": otrzymalem REQUEST od " << msgRecv[RANK] << '\n';
 		} else if (msgRecv[TYP]==END){
-
+			addToQueue(msgRecv);
 			clock_mutex.lock();
 			synchClock(msgRecv[ZEGAR]);
 			clock_mutex.unlock();
 
-			addToQueue(msgRecv);
+			//addToQueue(msgRecv);
+			//vec_mutex.lock();
+			//eraseFromVector();
+			//vec_mutex.unlock();
+
 			lock_guard<std::mutex> lock(receiveResponses_mutex);
 			processed = true;
 			newMessageReceived.notify_one();
@@ -300,16 +334,54 @@ int findProcess(int i){
 	return -1;
 }
 
-void handler(){
-	for (int i = 0; i<queue.size(); i++){
-		int pid = findProcess(queue.at(i).rank);
-		tab[pid].zegar = queue.at(i).zegar;
-		tab[pid].TIMES = queue.at(i).TIMES;
+int findInVector(int i){
+	for (int j=0; j<reqVector.size(); j++){
+		if (i==reqVector.at(j).rank)
+			return j;
 	}
-	int myid = findProcess(id);
-	tab[myid].zegar = zegar;
-	tab[myid].TIMES = timestamp;
+	return -1;
+}
+
+void handler(){
+
+	for (int i = 0; i<queue.size(); i++){
+		if (queue.at(i).typ == END){
+			eraseFromVector(queue.at(i).rank);
+		} else if (queue.at(i).typ == REQUEST || queue.at(i).typ == RESPONSE){
+			int pid = findInVector(queue.at(i).rank);
+			if (pid<0){
+				Narciarz adam = Narciarz();
+				adam.rank = queue.at(i).rank;
+				adam.zegar = queue.at(i).zegar;
+				adam.TIMES = queue.at(i).TIMES;
+				adam.waga = queue.at(i).weight;
+				reqVector.push_back(adam);
+			} else {
+				reqVector.at(pid).zegar = queue.at(i).zegar;
+				reqVector.at(pid).TIMES = queue.at(i).TIMES;
+			}
+		}
+	}
+	int myid = findInVector(id);
+	if (myid<0){
+		refresh();
+		reqVector.push_back(narciarz);
+	} else {
+		reqVector.at(myid).zegar = zegar;
+		reqVector.at(myid).TIMES = timestamp;
+	}
 	queue.clear();
+
+/*
+	for (int i=0; i<queue.size(); i++){
+		int id = queue.at(i).rank;
+		int j = queue.size() - 1;
+			while(j!=i){
+				if (queue.at(j).rank==id) break;
+				j--;
+			}
+	}
+	*/
 }
 
 void synchClock(int recivedClock){
@@ -349,11 +421,18 @@ void sendRequest(){
 
 bool accessLift(){
 
+	vec_mutex.lock();
+	vecToTab();
+	std::cout << id<< ": za vecToTab" << '\n';
 	//queue_mutex.lock();
 	tab_mutex.lock();
 	sortTab();
+	std::cout << id<< ": za sortTab" << '\n';
 	tab_mutex.unlock();
 	//queue_mutex.unlock();
+	tabToVec();
+	std::cout << id<< ": za tabToVec" << '\n';
+	vec_mutex.unlock();
 
 	//warunek na wejscie na wyciagu
 	if (canEnterIntoLift()) {
@@ -372,12 +451,12 @@ bool canEnterIntoLift(){
 
 	//dodaj wagi narciarzy stojacych przede mna w kolejce
 	do {
-		pid = tab[i].rank;
-		sum += tab[i].waga;
+		pid = reqVector.at(i).rank;
+		sum += reqVector.at(i).waga;
 		i++;
 	} while (i<size && pid!=id);
 	std::cout << '\n';
-	printTab();
+	printVec();
 	std::cout << '\n';
 
 	std::cout << id << ": suma wag narciarzy przede mna: " << sum << '\n';
@@ -387,7 +466,7 @@ bool canEnterIntoLift(){
 }
 
 void incrementLamportClock(){
-	zegar += 1;
+	zegar++;
 	timestamp++;
 }
 
@@ -417,6 +496,7 @@ void sendLiftLeft(){
 	//if (j!=-1 && j<size-1)
 	//	for (j = j + 1; j < size; j++)
 	//sendMessage(tab[j].rank, END, stan);
+	eraseFromVector(id);
 	sendMessageToAll(END, stan);
 	std::cout << id << " wysylam END do wszystkich" << '\n';
 	//refresh();
@@ -428,6 +508,7 @@ bool waitForPlace(){
 	handler();
 	tab_mutex.unlock();
 	queue_mutex.unlock();
+	std::cout << id << ": Handler udany!" << '\n';
 	return accessLift();
 }
 
@@ -439,12 +520,14 @@ int main( int argc, char **argv )
 	MPI_Comm_rank( MPI_COMM_WORLD, &id );
 
 	int msg[MSG_SIZE];
+	tab = new Narciarz[size];
 
 	char processor_name[MPI_MAX_PROCESSOR_NAME];
 	int namelen;
 
 	stan = W_KOLEJCE;
-	narciarz.waga = (id*10 + 50) % N;
+	waga = (id*10 + 50) % N;
+	narciarz.waga = waga;
 	narciarz.rank = id;
 	narciarz.zegar = zegar;
 	narciarz.stan = stan;
@@ -455,6 +538,7 @@ int main( int argc, char **argv )
 	printf( "Jestem narciarzem %d o wadze %d i stanie %d. Moj zegar to %d, nazywam sie %s\n", narciarz.rank, narciarz.waga, narciarz.stan, narciarz.zegar, processor_name);
 
 	// inicjalizacja tablic
+	/*
 	sendMessageToAll(WAGA, narciarz.waga);
 	refresh();
 	Package me = Package();
@@ -463,6 +547,7 @@ int main( int argc, char **argv )
 	me.typ = WAGA;
 	me.val = narciarz.waga;
 	me.TIMES = timestamp;
+	me.weight = waga;
 	queue.push_back(me);
 	//tab[size-1] = narciarz;
 
@@ -471,18 +556,21 @@ int main( int argc, char **argv )
 	initTab();
 	queue.clear();
 	sortTab();
-	printTab();
+	//printTab();
 
+	//tabToVec();
+	//printVec();
 	std::cout << "\n" << '\n';
+
 	MPI_Barrier(MPI_COMM_WORLD);
+	*/
 
 	//petla while
-
 	threadAnswer = true;
 	thread receiver (sleepAndAnswer);
 
 	while(true){
-		threadAnswer = true;
+		//threadAnswer = true;
 		//wyslij zadanie
 		//clock_mutex.lock();
 		clockTimestampSynchro();
@@ -500,6 +588,8 @@ int main( int argc, char **argv )
 		handler();
 		tab_mutex.unlock();
 		queue_mutex.unlock();
+
+
 		std::cout << id << ": uaktualnilem tablice" << '\n';
 		if (accessLift()){
 			intoLift();
@@ -529,6 +619,7 @@ int main( int argc, char **argv )
 				unique_lock<std::mutex> lock(receiveResponses_mutex);
 				std::cout << id << ": czekam na zwolnienie miejsca" << '\n';
 				newMessageReceived.wait(lock, []{return processed;});
+				std::cout << id << ": Wybudzilem sie!" << '\n';
 				processed = false;
 			} while (!waitForPlace());
 			intoLift();
