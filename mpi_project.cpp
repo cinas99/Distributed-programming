@@ -58,6 +58,7 @@ int timestamp = 0;
 int stan = 0;
 int typ = 0;
 int permissions = 0;
+int procInQueue = 0;
 int id;
 int size = S;
 bool threadAnswer = false;
@@ -68,6 +69,7 @@ mutex queue_mutex, clock_mutex, stan_mutex, receiveResponses_mutex, m, tab_mutex
 condition_variable newMessageReceived, cv;
 
 vector<Package> queue;
+vector<Package> reqVector;
 Narciarz *tab = new Narciarz[S];
 Narciarz narciarz = Narciarz();
 
@@ -104,7 +106,7 @@ void sendMessageToAll(int typ, int val){
 	int msg[MSG_SIZE];
 
 	clock_mutex.lock();
-	incrementLamportClock();
+	//incrementLamportClock();
 	msg[ZEGAR] = zegar;
 	msg[TIMESTAMP] = timestamp;
 	clock_mutex.unlock();
@@ -175,7 +177,7 @@ void initTab(){
 	}
 }
 
-void sortQueue(){
+void sortTab(){
 	//for(int n=0; n<size; n++)
 	//tab[n] = queue.at(n);
 	int j;
@@ -205,6 +207,15 @@ void printTab(){
 
 
 
+void eraseFromVector(){
+	int i = 0;
+	for (int j = 0; j<reqVector.size(); j++){
+		if (j==reqVector.at(j).rank) break;
+	}
+
+}
+
+
 void sleepAndAnswer(){
 	MPI_Status status;
 	int msgRecv[MSG_SIZE];
@@ -215,9 +226,16 @@ void sleepAndAnswer(){
 		MPI_Recv(msgRecv, MSG_SIZE, MPI_INT, MPI_ANY_SOURCE, MPI_ANY_TAG, MPI_COMM_WORLD, &status);
 
 		if (msgRecv[TYP]==RESPONSE && msgRecv[ZEGAR]>=timestamp){
-			if (msgRecv[VAL]== NA_WYCIAGU || msgRecv[VAL]==W_KOLEJCE)
+			if (msgRecv[VAL]== NA_WYCIAGU || msgRecv[VAL]==W_KOLEJCE){
 				addToQueue(msgRecv);
+				procInQueue++;
+			}
 			permissions++;
+
+			clock_mutex.lock();
+			synchClock(msgRecv[ZEGAR]);
+			clock_mutex.unlock();
+
 			std::cout << id << ": dostalem RESPONSE od " << msgRecv[RANK] << '\n';
 			if (permissions==size-1){
 				lock_guard<std::mutex> lk(m);
@@ -241,6 +259,11 @@ void sleepAndAnswer(){
 			MPI_Send(msgSend, MSG_SIZE, MPI_INT, msgRecv[RANK], MPI_TAG, MPI_COMM_WORLD);
 			std::cout << id << ": otrzymalem REQUEST od " << msgRecv[RANK] << '\n';
 		} else if (msgRecv[TYP]==END){
+
+			clock_mutex.lock();
+			synchClock(msgRecv[ZEGAR]);
+			clock_mutex.unlock();
+
 			addToQueue(msgRecv);
 			lock_guard<std::mutex> lock(receiveResponses_mutex);
 			processed = true;
@@ -328,7 +351,7 @@ bool accessLift(){
 
 	//queue_mutex.lock();
 	tab_mutex.lock();
-	sortQueue();
+	sortTab();
 	tab_mutex.unlock();
 	//queue_mutex.unlock();
 
@@ -447,7 +470,7 @@ int main( int argc, char **argv )
 	receiveMessage();
 	initTab();
 	queue.clear();
-	sortQueue();
+	sortTab();
 	printTab();
 
 	std::cout << "\n" << '\n';
