@@ -7,7 +7,7 @@
 #include <mutex>
 #include <condition_variable>
 
-#define N 150
+#define N 200
 #define S 4 // size
 
 // zadania
@@ -253,7 +253,7 @@ void sleepAndAnswer(){
 
 
 	while(threadAnswer) {
-		MPI_Recv(msgRecv, MSG_SIZE, MPI_INT, MPI_ANY_SOURCE, MPI_ANY_TAG, MPI_COMM_WORLD, &status);
+		MPI_Recv(msgRecv, MSG_SIZE, MPI_INT, MPI_ANY_SOURCE, MPI_TAG, MPI_COMM_WORLD, &status);
 
 		if (msgRecv[TYP]==RESPONSE && msgRecv[ZEGAR]>=timestamp){
 			if (msgRecv[VAL]== NA_WYCIAGU || msgRecv[VAL]==W_KOLEJCE){
@@ -303,6 +303,8 @@ void sleepAndAnswer(){
 			processed = true;
 			newMessageReceived.notify_one();
 			std::cout << id << ": otrzymalem END od " << msgRecv[RANK] << '\n';
+		} else {
+			std::cout << "Blad!" << '\n';
 		}
 		/*
 		//gdy zadanie to odpowiadamy zgoda lub dodajemy do kolejki oczekujacych
@@ -363,6 +365,7 @@ void handler(){
 		}
 	}
 	int myid = findInVector(id);
+	clock_mutex.lock();
 	if (myid<0){
 		refresh();
 		reqVector.push_back(narciarz);
@@ -370,6 +373,7 @@ void handler(){
 		reqVector.at(myid).zegar = zegar;
 		reqVector.at(myid).TIMES = timestamp;
 	}
+	clock_mutex.unlock();
 	queue.clear();
 
 /*
@@ -415,7 +419,8 @@ void intoLift(){
 
 void sendRequest(){
 	typ = REQUEST;
-	sendMessageToAll(typ, REQUEST);
+	changeStatus(W_KOLEJCE);
+	sendMessageToAll(typ, stan);
 	refresh();
 }
 
@@ -470,7 +475,8 @@ void incrementLamportClock(){
 	timestamp++;
 }
 
-void changeStatus(int stan){
+void changeStatus(int status){
+	stan = status;
 	narciarz.stan = stan;
 }
 
@@ -491,7 +497,7 @@ void sendLiftLeft(){
 
 	clockTimestampSynchro();
 
-	stan = KONIEC_WJAZDU;
+	changeStatus(KONIEC_WJAZDU);
 	//int j = findProcess(id);
 	//if (j!=-1 && j<size-1)
 	//	for (j = j + 1; j < size; j++)
@@ -521,12 +527,15 @@ int main( int argc, char **argv )
 
 	int msg[MSG_SIZE];
 	tab = new Narciarz[size];
+	threadAnswer = true;
+	thread receiver (sleepAndAnswer);
 
 	char processor_name[MPI_MAX_PROCESSOR_NAME];
 	int namelen;
 
 	stan = W_KOLEJCE;
-	waga = (id*10 + 50) % N;
+	//waga = (id*10 + 50) % N;
+	waga = 50 + (id*5);
 	narciarz.waga = waga;
 	narciarz.rank = id;
 	narciarz.zegar = zegar;
@@ -566,18 +575,15 @@ int main( int argc, char **argv )
 	*/
 
 	//petla while
-	threadAnswer = true;
-	thread receiver (sleepAndAnswer);
 
 	while(true){
 		//threadAnswer = true;
 		//wyslij zadanie
 		//clock_mutex.lock();
-		clockTimestampSynchro();
 
+		std::cout << id << ": wysylam REQUEST do wszystkich!" << '\n';
 		sendRequest();
 		//clock_mutex.unlock();
-		std::cout << id << ": wyslalem REQUEST do wszystkich!" << '\n';
 		std::unique_lock<std::mutex> lk(m);
 		cv.wait(lk, []{return ready;});
 		std::cout << id << ": jestem za cv.wait" << '\n';
@@ -624,6 +630,7 @@ int main( int argc, char **argv )
 			} while (!waitForPlace());
 			intoLift();
 		}
+		clockTimestampSynchro();
 	}
 delete[] tab;
 MPI_Finalize();
