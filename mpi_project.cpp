@@ -21,13 +21,9 @@
 #define MPI_TAG 1
 
 //typ
-#define INFO 0
-#define POTWIERDZENIE 1
-#define STAN 2
-#define WAGA 3
 #define RESPONSE 4
 #define REQUEST 5
-#define END 6
+#define RELEASE 6
 #define WEIGHT 5
 
 #define RANK 0
@@ -89,7 +85,6 @@ void changeStatus(int stan);
 
 void sendMessage(int receiver, int typ, int val){
 	int msg[MSG_SIZE];
-	//incrementLamportClock();
 
 	clock_mutex.lock();
 	msg[ZEGAR] = zegar;
@@ -100,17 +95,13 @@ void sendMessage(int receiver, int typ, int val){
 	msg[TYP] = typ;
 	msg[VAL] = val;
 	msg[WEIGHT] = waga;
-	//MPI_Bcast(msg, MSG_SIZE, MPI_INT, msg[0], MPI_COMM_WORLD);
 	MPI_Send(msg, MSG_SIZE, MPI_INT, receiver, MPI_TAG, MPI_COMM_WORLD);
-	//cout << id << ": " << "wyslalem do " << receiver << "\n";
-	//printf("%d: Wysylam bcast\n", msg[0]);
 }
 
 void sendMessageToAll(int typ, int val){
 	int msg[MSG_SIZE];
 
 	clock_mutex.lock();
-	//incrementLamportClock();
 	msg[ZEGAR] = zegar;
 	msg[TIMESTAMP] = timestamp;
 	clock_mutex.unlock();
@@ -119,43 +110,14 @@ void sendMessageToAll(int typ, int val){
 	msg[TYP] = typ;
 	msg[VAL] = val;
 	msg[WEIGHT] = waga;
-	//MPI_Bcast(msg, MSG_SIZE, MPI_INT, msg[0], MPI_COMM_WORLD);
 	for(int i=0; i<size; i++){
 		if (id!=i){
 			MPI_Send(msg, MSG_SIZE, MPI_INT, i, MPI_TAG, MPI_COMM_WORLD);
-			//cout<< narciarz.rank<<": " << "wyslalem do "<<i<<"\n";
 		}
 	}
-	//printf("%d: Wysylam bcast\n", msg[0]);
-}
-
-void receiveMessage() {
-	int msg[MSG_SIZE];
-	int i;
-	MPI_Status status;
-	for(i=0; i<size; i++){
-		if (i!=id){
-			MPI_Recv(msg, MSG_SIZE, MPI_INT, MPI_ANY_SOURCE, MPI_ANY_TAG, MPI_COMM_WORLD, &status);
-			//MPI_Bcast(msg, MSG_SIZE, MPI_INT, i, MPI_COMM_WORLD);
-			//printf("%d: Otrzymalem bcast id:%d zegar:%d stan:%d waga:%d) od %d\n", id, msg[0], msg[1], msg[2], msg[3], i);
-			addToQueue(msg);
-		}
-	}
-}
-
-void sendConfirm(int receiver){
-	int msg[MSG_SIZE];
-	msg[RANK] = id;
-	msg[TYP] = INFO;
-	msg[VAL] = POTWIERDZENIE;
-	msg[ZEGAR] = zegar;
-	MPI_Send(msg, MSG_SIZE, MPI_INT, receiver, MPI_TAG, MPI_COMM_WORLD);
-	std::cout << id << ": wysylam potwierdzenie" << '\n';
 }
 
 void addToQueue(int *msg){
-	//, vector<struct Narciarz*> queue){
-	//Narciarz n = Narciarz();
 	Package n = Package();
 	n.rank = msg[RANK];
 	n.zegar = msg[ZEGAR];
@@ -166,21 +128,6 @@ void addToQueue(int *msg){
 	queue_mutex.lock();
 	queue.push_back(n);
 	queue_mutex.unlock();
-	//printf("Dopisalem do queue rank:%d zegar:%d stan:%d waga:%d) \n", msg[0], msg[1], msg[2], msg[3]);
-}
-
-void initTab(){
-	for(int n=0; n<queue.size(); n++){
-		Narciarz adam = Narciarz();
-		adam.rank = queue.at(n).rank;
-		adam.zegar = queue.at(n).zegar;
-		adam.TIMES = queue.at(n).TIMES;
-		int type = queue.at(n).typ;
-		if (type == WAGA){
-			adam.waga = queue.at(n).val;
-		}
-		tab[n] = adam;
-	}
 }
 
 void vecToTab(){
@@ -196,21 +143,9 @@ void tabToVec(){
 	for (int i = 0; i<procInQueue; i++) {
 		reqVector.push_back(tab[i]);
 	}
-	/*
-	for(int i = 0; i<size; i++){
-		Narciarz adam = Narciarz();
-		adam.rank = tab[i].rank;
-		adam.zegar = tab[i].zegar;
-		adam.TIMES = tab[i].TIMES;
-		adam.waga = tab[i].weight;
-		reqVector.push_back(adam);
-	}
-	*/
 }
 
 void sortTab(){
-	//for(int n=0; n<size; n++)
-	//tab[n] = queue.at(n);
 	int j;
 	Narciarz temp;
 	for(int i=1; i<procInQueue; i++){
@@ -229,13 +164,6 @@ void printVec(){
 		printf("%d: kolejka rank:%d zegar:%d timestamp:%d waga:%d\n", id, reqVector.at(i).rank, reqVector.at(i).zegar, reqVector.at(i).TIMES, reqVector.at(i).waga);
 	}
 }
-
-void printTab(){
-	for(int i=0; i<size; i++){
-		printf("%d: kolejka rank:%d timestamp:%d waga:%d\n", id, tab[i].rank, tab[i].TIMES, tab[i].waga);
-	}
-}
-
 
 
 void eraseFromVector(int i){
@@ -256,10 +184,8 @@ void sleepAndAnswer(){
 		MPI_Recv(msgRecv, MSG_SIZE, MPI_INT, MPI_ANY_SOURCE, MPI_TAG, MPI_COMM_WORLD, &status);
 
 		if (msgRecv[TYP]==RESPONSE && msgRecv[ZEGAR]>=timestamp){
-			if (msgRecv[VAL]== NA_WYCIAGU || msgRecv[VAL]==W_KOLEJCE){
+			if (msgRecv[VAL]== NA_WYCIAGU || msgRecv[VAL]==W_KOLEJCE)
 				addToQueue(msgRecv);
-				//procInQueue++;
-			}
 			permissions++;
 
 			clock_mutex.lock();
@@ -288,41 +214,19 @@ void sleepAndAnswer(){
 			msgSend[VAL] = stan;
 			MPI_Send(msgSend, MSG_SIZE, MPI_INT, msgRecv[RANK], MPI_TAG, MPI_COMM_WORLD);
 			std::cout << id << ": otrzymalem REQUEST od " << msgRecv[RANK] << '\n';
-		} else if (msgRecv[TYP]==END){
+		} else if (msgRecv[TYP]==RELEASE){
 			addToQueue(msgRecv);
 			clock_mutex.lock();
 			synchClock(msgRecv[ZEGAR]);
 			clock_mutex.unlock();
 
-			//addToQueue(msgRecv);
-			//vec_mutex.lock();
-			//eraseFromVector();
-			//vec_mutex.unlock();
-
 			lock_guard<std::mutex> lock(receiveResponses_mutex);
 			processed = true;
 			newMessageReceived.notify_one();
-			std::cout << id << ": otrzymalem END od " << msgRecv[RANK] << '\n';
+			std::cout << id << ": otrzymalem RELEASE od " << msgRecv[RANK] << '\n';
 		} else {
 			std::cout << "Blad!" << '\n';
 		}
-		/*
-		//gdy zadanie to odpowiadamy zgoda lub dodajemy do kolejki oczekujacych
-		if (msgRecv[TYP] == STAN && msgRecv[VAL] = W_KOLEJCE){
-		if (msgRecv[ZEGAR] < zegar || (msgRecv[ZEGAR]==zegar && msgRecv[RANK]<id)){
-		sendMessage(msgRecv[RANK], INFO, POTWIERDZENIE);
-	} else {
-	lock_guard<std::mutex> lk(receiveResponses_mutex);
-	addToQueue(msgRecv);
-	processed = true;
-	cout<< id <<": otrzymalem wiadomosc od " << msgRecv[RANK] << "\n";
-	//lk.unlock();
-	newMessageReceived.notify_one();
-}
-} else if (msgRecv[TYP] == INFO && msgRecv[VAL] == POTWIERDZENIE) {
-
-}
-*/
 }
 }
 
@@ -347,7 +251,7 @@ int findInVector(int i){
 void handler(){
 
 	for (int i = 0; i<queue.size(); i++){
-		if (queue.at(i).typ == END){
+		if (queue.at(i).typ == RELEASE){
 			eraseFromVector(queue.at(i).rank);
 		} else if (queue.at(i).typ == REQUEST || queue.at(i).typ == RESPONSE){
 			int pid = findInVector(queue.at(i).rank);
@@ -375,17 +279,6 @@ void handler(){
 	}
 	clock_mutex.unlock();
 	queue.clear();
-
-/*
-	for (int i=0; i<queue.size(); i++){
-		int id = queue.at(i).rank;
-		int j = queue.size() - 1;
-			while(j!=i){
-				if (queue.at(j).rank==id) break;
-				j--;
-			}
-	}
-	*/
 }
 
 void synchClock(int recivedClock){
@@ -399,12 +292,6 @@ void intoLift(){
 	changeStatus(NA_WYCIAGU);
 	stan_mutex.unlock();
 
-	/*
-	clock_mutex.lock();
-	incrementLamportClock();
-	clock_mutex.unlock();
-	*/
-	//thread receiver (sleepAndAnswer);
 	int randTime = 2 + (rand() % 5);
 	this_thread::sleep_for(std::chrono::seconds(randTime));
 	std::cout << id << ": wjechalem na szczyt" << '\n';
@@ -414,7 +301,6 @@ void intoLift(){
 	int randTime1 = 5 + (rand() % 5);
 	this_thread::sleep_for(std::chrono::seconds(randTime1));
 	std::cout << id << ": zjechalem na nartach" << '\n';
-	//threadAnswer = false;
 }
 
 void sendRequest(){
@@ -429,12 +315,10 @@ bool accessLift(){
 	vec_mutex.lock();
 	vecToTab();
 	std::cout << id<< ": za vecToTab" << '\n';
-	//queue_mutex.lock();
 	tab_mutex.lock();
 	sortTab();
 	std::cout << id<< ": za sortTab" << '\n';
 	tab_mutex.unlock();
-	//queue_mutex.unlock();
 	tabToVec();
 	std::cout << id<< ": za tabToVec" << '\n';
 	vec_mutex.unlock();
@@ -494,18 +378,11 @@ void clockTimestampSynchro() {
 }
 
 void sendLiftLeft(){
-
 	clockTimestampSynchro();
-
 	changeStatus(KONIEC_WJAZDU);
-	//int j = findProcess(id);
-	//if (j!=-1 && j<size-1)
-	//	for (j = j + 1; j < size; j++)
-	//sendMessage(tab[j].rank, END, stan);
 	eraseFromVector(id);
-	sendMessageToAll(END, stan);
-	std::cout << id << " wysylam END do wszystkich" << '\n';
-	//refresh();
+	sendMessageToAll(RELEASE, stan);
+	std::cout << id << " wysylam RELEASE do wszystkich" << '\n';
 }
 
 bool waitForPlace(){
@@ -534,7 +411,6 @@ int main( int argc, char **argv )
 	int namelen;
 
 	stan = W_KOLEJCE;
-	//waga = (id*10 + 50) % N;
 	waga = 50 + (id*5);
 	narciarz.waga = waga;
 	narciarz.rank = id;
@@ -543,51 +419,18 @@ int main( int argc, char **argv )
 	narciarz.TIMES = timestamp;
 
 	MPI_Get_processor_name(processor_name,&namelen);
-	//printf( "Jestem %d z %d na %s\n", rank, size, processor_name );
 	printf( "Jestem narciarzem %d o wadze %d i stanie %d. Moj zegar to %d, nazywam sie %s\n", narciarz.rank, narciarz.waga, narciarz.stan, narciarz.zegar, processor_name);
 
-	// inicjalizacja tablic
-	/*
-	sendMessageToAll(WAGA, narciarz.waga);
-	refresh();
-	Package me = Package();
-	me.rank = id;
-	me.zegar = zegar;
-	me.typ = WAGA;
-	me.val = narciarz.waga;
-	me.TIMES = timestamp;
-	me.weight = waga;
-	queue.push_back(me);
-	//tab[size-1] = narciarz;
-
-
-	receiveMessage();
-	initTab();
-	queue.clear();
-	sortTab();
-	//printTab();
-
-	//tabToVec();
-	//printVec();
-	std::cout << "\n" << '\n';
-
-	MPI_Barrier(MPI_COMM_WORLD);
-	*/
-
-	//petla while
-
 	while(true){
-		//threadAnswer = true;
-		//wyslij zadanie
-		//clock_mutex.lock();
 
 		std::cout << id << ": wysylam REQUEST do wszystkich!" << '\n';
 		sendRequest();
-		//clock_mutex.unlock();
+
 		std::unique_lock<std::mutex> lk(m);
 		cv.wait(lk, []{return ready;});
 		std::cout << id << ": jestem za cv.wait" << '\n';
 		ready = false;
+
 //aktualizacja czasow w tablicy
 		queue_mutex.lock();
 		tab_mutex.lock();
@@ -599,27 +442,6 @@ int main( int argc, char **argv )
 		std::cout << id << ": uaktualnilem tablice" << '\n';
 		if (accessLift()){
 			intoLift();
-			/*
-			stan_mutex.lock();
-			changeStatus(NA_WYCIAGU);
-			stan_mutex.unlock();
-
-			clock_mutex.lock();
-			incrementLamportClock();
-			clock_mutex.unlock();
-
-			//thread receiver (sleepAndAnswer);
-			int randTime = 1000 + (rand() % 2000);
-			this_thread::sleep_for(std::chrono::milliseconds(randTime));
-			std::cout << id << ": wjechalem na szczyt" << '\n';
-			sendLiftLeft();
-
-			int randTime1 = 1000 + (rand() % 2000);
-			this_thread::sleep_for(std::chrono::milliseconds(randTime1));
-			std::cout << id << ": zjechalem na nartach" << '\n';
-			threadAnswer = false;
-			//receiver.join();
-			*/
 		} else {
 			do {
 				unique_lock<std::mutex> lock(receiveResponses_mutex);
@@ -634,5 +456,4 @@ int main( int argc, char **argv )
 	}
 delete[] tab;
 MPI_Finalize();
-
 }
